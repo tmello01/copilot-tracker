@@ -29,6 +29,7 @@ export function activate(context: vscode.ExtensionContext) {
     let lastSavedStats: string = JSON.stringify(stats);
     let saveTimeout: NodeJS.Timeout | undefined;
     let lastCopilotSuggestion: string | undefined;
+    let isAcceptingSuggestion = false;
 
     // Function to get repository root
     const getRepositoryRoot = (): string | undefined => {
@@ -101,10 +102,10 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for inline suggestions
     let inlineSuggestionDisposable = vscode.languages.registerInlineCompletionItemProvider('*', {
         provideInlineCompletionItems: async (document, position, context, token) => {
-            // Store the current suggestion for later comparison
             if (context.triggerKind === vscode.InlineCompletionTriggerKind.Automatic) {
                 const currentLine = document.lineAt(position.line).text;
                 lastCopilotSuggestion = currentLine;
+                isAcceptingSuggestion = true;
             }
             return [];
         }
@@ -117,11 +118,16 @@ export function activate(context: vscode.ExtensionContext) {
         // Check if the change matches a Copilot suggestion
         const isCopilotChange = event.contentChanges.some(change => {
             const newText = change.text;
-            const oldText = document.getText(change.range);
+            
+            // If we're currently accepting a suggestion
+            if (isAcceptingSuggestion) {
+                isAcceptingSuggestion = false;
+                return true;
+            }
             
             // If the change matches a previously seen Copilot suggestion
             if (lastCopilotSuggestion && newText.includes(lastCopilotSuggestion)) {
-                lastCopilotSuggestion = undefined; // Reset the suggestion
+                lastCopilotSuggestion = undefined;
                 return true;
             }
             
@@ -129,9 +135,12 @@ export function activate(context: vscode.ExtensionContext) {
             const isMultiLine = newText.includes('\n');
             const isCompleteStatement = newText.trim().endsWith(';') || 
                                       newText.trim().endsWith('}') || 
-                                      newText.trim().endsWith(')');
+                                      newText.trim().endsWith(')') ||
+                                      newText.trim().endsWith(']') ||
+                                      newText.trim().endsWith('"') ||
+                                      newText.trim().endsWith("'");
             
-            return isMultiLine && isCompleteStatement;
+            return isMultiLine || isCompleteStatement;
         });
         
         if (isCopilotChange) {
@@ -142,7 +151,9 @@ export function activate(context: vscode.ExtensionContext) {
             
             // Count new lines added by Copilot
             const newLines = event.contentChanges.reduce((count, change) => {
-                return count + (change.text.split('\n').length - 1);
+                const lines = change.text.split('\n');
+                // Count non-empty lines
+                return count + lines.filter(line => line.trim().length > 0).length;
             }, 0);
             
             if (newLines > 0) {
