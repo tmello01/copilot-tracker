@@ -19,6 +19,10 @@
       {
         "command": "copilot-line-tracking.showStats",
         "title": "Show Copilot Stats"
+      },
+      {
+        "command": "copilot-line-tracking.clearStats",
+        "title": "Clear Copilot Stats"
       }
     ],
     "configuration": {

@@ -31,6 +31,19 @@ export function activate(context: vscode.ExtensionContext) {
     let lastCopilotSuggestion: string | undefined;
     let isAcceptingSuggestion = false;
 
+    // Function to clear all stats
+    const clearStats = () => {
+        stats = {
+            totalLines: 0,
+            copilotLines: 0,
+            lastUpdated: new Date().toISOString(),
+            fileStats: {}
+        };
+        lastSavedStats = JSON.stringify(stats);
+        context.globalState.update('copilotStats', undefined);
+        saveStatsToFile();
+    };
+
     // Function to check if a file should be tracked
     const shouldTrackFile = (filePath: string): boolean => {
         // Skip temporary suggestion files
@@ -250,6 +263,12 @@ export function activate(context: vscode.ExtensionContext) {
         );
     });
 
+    // Register the command to clear stats
+    let clearStatsDisposable = vscode.commands.registerCommand('copilot-line-tracking.clearStats', () => {
+        clearStats();
+        vscode.window.showInformationMessage('Copilot stats have been cleared.');
+    });
+
     // Add status bar item
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'copilot-line-tracking.showStats';
@@ -274,7 +293,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         changeDisposable, 
         openDisposable, 
-        statsDisposable, 
+        statsDisposable,
+        clearStatsDisposable,
         statusBarItem,
         inlineSuggestionDisposable
     );
