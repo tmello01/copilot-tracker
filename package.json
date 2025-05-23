@@ -37,6 +37,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show the Copilot usage percentage in the status bar"
+        },
+        "copilotLineTracking.trackedExtensions": {
+          "type": "array",
+          "default": [
+            ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".cpp", ".h", ".hpp",
+            ".cs", ".go", ".rb", ".php", ".swift", ".kt", ".rs", ".dart", ".vue",
+            ".html", ".css", ".scss", ".sass", ".less", ".json", ".xml", ".yaml",
+            ".yml", ".md", ".sql", ".sh", ".bash", ".ps1", ".schema"
+          ],
+          "description": "File extensions to track for Copilot usage"
         }
       }
     }
