@@ -31,6 +31,39 @@ export function activate(context: vscode.ExtensionContext) {
     let lastCopilotSuggestion: string | undefined;
     let isAcceptingSuggestion = false;
 
+    // Function to check if a file should be tracked
+    const shouldTrackFile = (filePath: string): boolean => {
+        // Skip temporary suggestion files
+        if (filePath.includes('/response_') || filePath.includes('\\response_')) {
+            return false;
+        }
+
+        // Skip files in .git directory
+        if (filePath.includes('/.git/') || filePath.includes('\\.git\\')) {
+            return false;
+        }
+
+        // Skip node_modules
+        if (filePath.includes('/node_modules/') || filePath.includes('\\node_modules\\')) {
+            return false;
+        }
+
+        // Skip the stats file itself
+        if (filePath.endsWith('.copilot-stats.json')) {
+            return false;
+        }
+
+        // Only track files with common code extensions
+        const codeExtensions = [
+            '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp',
+            '.cs', '.go', '.rb', '.php', '.swift', '.kt', '.rs', '.dart', '.vue',
+            '.html', '.css', '.scss', '.sass', '.less', '.json', '.xml', '.yaml',
+            '.yml', '.md', '.sql', '.sh', '.bash', '.ps1'
+        ];
+
+        return codeExtensions.some(ext => filePath.toLowerCase().endsWith(ext));
+    };
+
     // Function to get repository root
     const getRepositoryRoot = (): string | undefined => {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -84,6 +117,12 @@ export function activate(context: vscode.ExtensionContext) {
     // Function to update file stats
     const updateFileStats = (document: vscode.TextDocument) => {
         const filePath = document.uri.fsPath;
+        
+        // Skip files that shouldn't be tracked
+        if (!shouldTrackFile(filePath)) {
+            return;
+        }
+
         const lineCount = document.lineCount;
         
         if (!stats.fileStats[filePath]) {
@@ -92,11 +131,25 @@ export function activate(context: vscode.ExtensionContext) {
 
         const oldTotal = stats.fileStats[filePath].totalLines;
         if (oldTotal !== lineCount) {
+            // Update total lines
             stats.fileStats[filePath].totalLines = lineCount;
             stats.totalLines = stats.totalLines - oldTotal + lineCount;
+
+            // Ensure copilot lines don't exceed total lines
+            if (stats.fileStats[filePath].copilotLines > lineCount) {
+                const excess = stats.fileStats[filePath].copilotLines - lineCount;
+                stats.fileStats[filePath].copilotLines = lineCount;
+                stats.copilotLines -= excess;
+            }
+
             stats.lastUpdated = new Date().toISOString();
             saveStats();
         }
+    };
+
+    // Function to count non-empty lines in text
+    const countNonEmptyLines = (text: string): number => {
+        return text.split('\n').filter(line => line.trim().length > 0).length;
     };
 
     // Listen for inline suggestions
@@ -114,6 +167,12 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for document changes
     let changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
         const document = event.document;
+        const filePath = document.uri.fsPath;
+
+        // Skip files that shouldn't be tracked
+        if (!shouldTrackFile(filePath)) {
+            return;
+        }
         
         // Check if the change matches a Copilot suggestion
         const isCopilotChange = event.contentChanges.some(change => {
@@ -144,23 +203,27 @@ export function activate(context: vscode.ExtensionContext) {
         });
         
         if (isCopilotChange) {
-            const filePath = document.uri.fsPath;
             if (!stats.fileStats[filePath]) {
                 stats.fileStats[filePath] = { totalLines: 0, copilotLines: 0 };
             }
             
             // Count new lines added by Copilot
             const newLines = event.contentChanges.reduce((count, change) => {
-                const lines = change.text.split('\n');
-                // Count non-empty lines
-                return count + lines.filter(line => line.trim().length > 0).length;
+                return count + countNonEmptyLines(change.text);
             }, 0);
             
             if (newLines > 0) {
-                stats.fileStats[filePath].copilotLines += newLines;
-                stats.copilotLines += newLines;
-                stats.lastUpdated = new Date().toISOString();
-                saveStats();
+                const currentTotal = stats.fileStats[filePath].totalLines;
+                const currentCopilot = stats.fileStats[filePath].copilotLines;
+                const newCopilotTotal = currentCopilot + newLines;
+
+                // Ensure we don't exceed total lines
+                if (newCopilotTotal <= currentTotal) {
+                    stats.fileStats[filePath].copilotLines = newCopilotTotal;
+                    stats.copilotLines += newLines;
+                    stats.lastUpdated = new Date().toISOString();
+                    saveStats();
+                }
             }
         }
         
