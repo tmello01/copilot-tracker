@@ -26,6 +26,10 @@ export function activate(context: vscode.ExtensionContext) {
         fileStats: {}
     };
 
+    let lastSavedStats: string = JSON.stringify(stats);
+    let saveTimeout: NodeJS.Timeout | undefined;
+    let lastCopilotSuggestion: string | undefined;
+
     // Function to get repository root
     const getRepositoryRoot = (): string | undefined => {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -42,6 +46,11 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
+        const currentStats = JSON.stringify(stats);
+        if (currentStats === lastSavedStats) {
+            return; // Don't save if nothing has changed
+        }
+
         const statsFilePath = path.join(repoRoot, '.copilot-stats.json');
         const repositoryStats: RepositoryStats = {
             stats,
@@ -51,15 +60,24 @@ export function activate(context: vscode.ExtensionContext) {
 
         try {
             fs.writeFileSync(statsFilePath, JSON.stringify(repositoryStats, null, 2));
+            lastSavedStats = currentStats;
         } catch (error) {
             console.error('Failed to save stats to file:', error);
         }
     };
 
+    // Function to schedule a save
+    const scheduleSave = () => {
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+        }
+        saveTimeout = setTimeout(saveStatsToFile, 5000); // Debounce saves for 5 seconds
+    };
+
     // Function to save stats
     const saveStats = () => {
         context.globalState.update('copilotStats', stats);
-        saveStatsToFile();
+        scheduleSave();
     };
 
     // Function to update file stats
@@ -72,20 +90,49 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const oldTotal = stats.fileStats[filePath].totalLines;
-        stats.fileStats[filePath].totalLines = lineCount;
-        stats.totalLines = stats.totalLines - oldTotal + lineCount;
-        
-        stats.lastUpdated = new Date().toISOString();
-        saveStats();
+        if (oldTotal !== lineCount) {
+            stats.fileStats[filePath].totalLines = lineCount;
+            stats.totalLines = stats.totalLines - oldTotal + lineCount;
+            stats.lastUpdated = new Date().toISOString();
+            saveStats();
+        }
     };
+
+    // Listen for inline suggestions
+    let inlineSuggestionDisposable = vscode.languages.registerInlineCompletionItemProvider('*', {
+        provideInlineCompletionItems: async (document, position, context, token) => {
+            // Store the current suggestion for later comparison
+            if (context.triggerKind === vscode.InlineCompletionTriggerKind.Automatic) {
+                const currentLine = document.lineAt(position.line).text;
+                lastCopilotSuggestion = currentLine;
+            }
+            return [];
+        }
+    });
 
     // Listen for document changes
     let changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
         const document = event.document;
         
-        // Check if the change was made by Copilot
-        const isCopilotChange = event.reason === vscode.TextDocumentChangeReason.Redo || 
-                              event.reason === vscode.TextDocumentChangeReason.Undo;
+        // Check if the change matches a Copilot suggestion
+        const isCopilotChange = event.contentChanges.some(change => {
+            const newText = change.text;
+            const oldText = document.getText(change.range);
+            
+            // If the change matches a previously seen Copilot suggestion
+            if (lastCopilotSuggestion && newText.includes(lastCopilotSuggestion)) {
+                lastCopilotSuggestion = undefined; // Reset the suggestion
+                return true;
+            }
+            
+            // Check for typical Copilot patterns
+            const isMultiLine = newText.includes('\n');
+            const isCompleteStatement = newText.trim().endsWith(';') || 
+                                      newText.trim().endsWith('}') || 
+                                      newText.trim().endsWith(')');
+            
+            return isMultiLine && isCompleteStatement;
+        });
         
         if (isCopilotChange) {
             const filePath = document.uri.fsPath;
@@ -98,10 +145,12 @@ export function activate(context: vscode.ExtensionContext) {
                 return count + (change.text.split('\n').length - 1);
             }, 0);
             
-            stats.fileStats[filePath].copilotLines += newLines;
-            stats.copilotLines += newLines;
-            stats.lastUpdated = new Date().toISOString();
-            saveStats();
+            if (newLines > 0) {
+                stats.fileStats[filePath].copilotLines += newLines;
+                stats.copilotLines += newLines;
+                stats.lastUpdated = new Date().toISOString();
+                saveStats();
+            }
         }
         
         updateFileStats(document);
@@ -145,13 +194,16 @@ export function activate(context: vscode.ExtensionContext) {
     setInterval(updateStatusBar, 5000);
     updateStatusBar();
 
-    // Save stats periodically
-    setInterval(saveStatsToFile, 60000); // Save every minute
-
     // Initial save
     saveStatsToFile();
 
-    context.subscriptions.push(changeDisposable, openDisposable, statsDisposable, statusBarItem);
+    context.subscriptions.push(
+        changeDisposable, 
+        openDisposable, 
+        statsDisposable, 
+        statusBarItem,
+        inlineSuggestionDisposable
+    );
 }
 
 function loadStats(context: vscode.ExtensionContext): CopilotStats | undefined {
